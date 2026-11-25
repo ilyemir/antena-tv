@@ -6,6 +6,10 @@ Kanal D
 NOW
 TV8
 Kanal 7
+CNBC-e
+Cartoon Network
+TRT Çocuk
+TRT Belgesel
 TRT Haber
 NTV
 Habertürk

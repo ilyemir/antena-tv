@@ -31,7 +31,7 @@ com.ilyemir.antena
 │   └── assets/
 │       ├── remote.html                 → "Antena Remote" tek dosyalık iPhone Safari paneli (CDN yok)
 │       ├── default_tr.m3u              → çok kaynaklı doğrulanmış gömülü Türk kanal havuzu (Primary+Backup)
-│       └── default_favorites.txt       → varsayılan "Özel Liste" sırası (13 ulusal kanal)
+│       └── default_favorites.txt       → varsayılan "Özel Liste" sırası (17 kanal)
 └── ui/
     ├── theme/AntenaTheme.kt            → renk tokenları + tipografi
     ├── PlayerScreen.kt                 → tam ekran yayın + OSD + D-Pad yönlendirme + uzaktan komutlar
@@ -45,7 +45,7 @@ com.ilyemir.antena
 
 - **Doğrudan yayın:** Uygulama açılınca menü yok; en son izlenen kanal anında tam ekranda açılır. Veritabanı boşsa (ilk açılış) APK'ya gömülü doğrulanmış Türk kanal havuzu otomatik içe aktarılır ve 001 kanalından yayına başlanır — SetupScreen sadece kullanıcı açıkça "sıfırdan kurulum" seçerse görünür.
 - **Freeze-frame zap:** `PlayerView.setKeepContentOnPlayerReset(true)` sayesinde kanal değişirken siyah ekran flaşı yaşanmaz; yeni yayın ilk karesini verene kadar önceki kanalın son karesi ekranda donuk kalır. Hızlı zap sırasında 250 ms debounce ile her ara akış yüklenmez.
-- **Özel Liste zap halkası:** Yukarı/CH+ bir sonraki, Aşağı/CH- bir önceki kanala geçer ve zap varsayılan olarak **Özel Liste** (favoriler, `favoriteOrder` sırasıyla; ilk kurulumda 13 ulusal kanal) içinde döner. Özel Liste boşsa tüm kanallar numaraya göre dolaşılır. Tüm kanallara Sol/OK ile açılan, "Özel Liste / Tüm Kanallar" sekmeli büyük puntolu sol çekmeceden erişilir.
+- **Özel Liste zap halkası:** Yukarı/CH+ bir sonraki, Aşağı/CH- bir önceki kanala geçer ve zap varsayılan olarak **Özel Liste** (favoriler, `favoriteOrder` sırasıyla; ilk kurulumda 17 mainstream kanal) içinde döner. Özel Liste boşsa tüm kanallar numaraya göre dolaşılır. Tüm kanallara Sol/OK ile açılan, "Özel Liste / Tüm Kanallar" sekmeli büyük puntolu sol çekmeceden erişilir.
 - **Sağlam tuş yakalama:** Kök `onPreviewKeyEvent` + kapatıldığında köke dönen FocusRequester sayesinde DirectionUp/Down ve CH+/CH− hiçbir alt görünüme sızmadan tüketilir; panel komutları `extraBufferCapacity=32` SharedFlow ve `rememberUpdatedState` ile işlenir — eski kompozisyon/kapanan (stale) durum yakalanmaz, peş peşe basılan tuşlar yutulmaz.
 - **Yatay NumPad:** Sağ ok, Mi Box kumandasında bulunmayan rakam tuşları için altta ince bir `0-9` şeridi açılır. Geleneksel TV gibi 3 hane dolunca ya da 2 sn sessizlikte otomatik geçiş yapar.
 - **Çift Geri koruması:** Geri tuşu uygulamayı kapatmaz; sağ üstte `"Çıkmak için tekrar basın"` uyarısı çıkar, ikinci basışta çıkar.
@@ -70,8 +70,14 @@ com.ilyemir.antena
 
 ### Gömülü Türk kanal havuzu ve Özel Liste
 
-- `assets/default_tr.m3u`: iptv-org, Free-TV ve diğer açık GitHub M3U kaynaklarından derlenen 24 ulusal kanal (TRT 1 … TRT Çocuk); her aday akış HEAD/GET ile canlı doğrulanmış, en hızlı 200 OK yanıt veren adres **Primary**, diğerleri **Backup** olarak yazılmıştır. ATV, NOW ve TRT Spor çift adresli (Backup'lı) girilir.
-- `assets/default_favorites.txt`: ilk kurulumda otomatik favorilenen 13 kanalı zap sırasıyla listeler (TRT 1, ATV, Show TV, Star TV, Kanal D, NOW, TV8, Kanal 7, TRT Haber, NTV, Habertürk, CNN Türk, TRT Spor).
+- `assets/default_tr.m3u`: açık kaynak listelerden (iptv-org, dearbulut, zek gist, Free-TV) derlenen ve `Mozilla/5.0` ile canlı doğrulanan (200 OK + geçerli HLS) **35 şifresiz mainstream kanal**; kulüp (FB/GS/BJK) ve müzik kanalları bilinçli olarak dışarıda. En hızlı yanıt veren adres **Primary**, çalışan ikinci adres **Backup** olarak ardışık satırlarda. 7 kanal yedekli: ATV, NOW, Kanal 7, TRT Belgesel, Bloomberg HT, TRT Spor, TRT Spor Yıldız.
+  - **Ana Akış (12):** TRT 1, ATV, Show TV, Star TV, Kanal D, NOW, TV8, Kanal 7, CNBC-e, 360 TV, A2, TRT 2
+  - **Çocuk (5):** Cartoon Network, TRT Çocuk, MinikaGO, Minika Çocuk, Spacetoon Türkiye
+  - **Belgesel (3):** TRT Belgesel, National Geographic, Nat Geo Wild
+  - **Haber (12):** TRT Haber, NTV, Habertürk, CNN Türk, Sözcü TV, Halk TV, A Haber, Haber Global, TV100, 24 TV, Bloomberg HT, A Para
+  - **Spor (3):** TRT Spor, TRT Spor Yıldız, A Spor
+  - Havuzda yer **bulunamayan** hedefler (şifreli/kaynakları ölü): TV8.5, DMAX, TLC, Teve2, Beyaz TV, Cartoonito, Discovery, Tarih TV, Ekol TV, TGRT Haber, HT Spor, Tivibu Spor, beIN Sports Haber.
+- `assets/default_favorites.txt`: ilk kurulumda otomatik favorilenen **17 kanal** (zap sırası): TRT 1, ATV, Show TV, Star TV, Kanal D, NOW, TV8, Kanal 7, CNBC-e, Cartoon Network, TRT Çocuk, TRT Belgesel, TRT Haber, NTV, Habertürk, CNN Türk, TRT Spor.
 - `ChannelEntity` alanları `isFavorite` + `favoriteOrder` (DB v2); Smart Merge ve JSON yedek/geri yükleme favori kararlarını **korur** (yedek sürümü 2).
 
 ## Antena Remote — telefon kontrol paneli (Faz 3)
