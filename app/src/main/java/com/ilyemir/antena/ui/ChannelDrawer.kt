@@ -43,8 +43,9 @@ import com.ilyemir.antena.ui.theme.AntenaType
 import kotlinx.coroutines.delay
 
 /**
- * Büyük puntolu sol kanal çekmecesi: tüm kanallara buradan erişilir.
- * Sol tuş, OK tuşu veya Geri ile kapanır.
+ * Büyük puntolu sol kanal çekmecesi: "Özel Liste" (zap halkası) ve "Tüm Kanallar"
+ * sekmeleri arasında geçiş yapılır. Sol tuş veya Geri ile kapanır.
+ * onSelect, dışarıdaki tam kanal listesindeki indeksi verir.
  */
 @Composable
 fun ChannelDrawer(
@@ -54,9 +55,14 @@ fun ChannelDrawer(
     onDismiss: () -> Unit,
     onManage: (() -> Unit)? = null,
 ) {
-    val currentIndex = channels.indexOfFirst { it.number == currentNumber }
+    var favOnly by remember { mutableStateOf(true) }
+    val favorites = channels.filter { it.isFavorite }.sortedBy { it.favoriteOrder }
+    val showingFav = favOnly && favorites.isNotEmpty()
+    val display = if (showingFav) favorites else channels
+    val currentIndex = display.indexOfFirst { it.number == currentNumber }
+    val focusRow = currentIndex.coerceAtLeast(0)
     val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = (currentIndex - 4).coerceAtLeast(0),
+        initialFirstVisibleItemIndex = (focusRow - 4).coerceAtLeast(0),
     )
     val initialFocus = remember { FocusRequester() }
 
@@ -94,10 +100,20 @@ fun ChannelDrawer(
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    "${channels.size}",
+                    "${display.size}",
                     style = AntenaType.Clock,
                     color = AntenaColors.TextSecondary,
                 )
+            }
+
+            // Sekme şeridi: Özel Liste (varsayılan) / Tüm Kanallar
+            Row(Modifier.fillMaxWidth()) {
+                DrawerTab("ÖZEL LİSTE", selected = showingFav, modifier = Modifier.weight(1f)) {
+                    favOnly = true
+                }
+                DrawerTab("TÜM KANALLAR", selected = !showingFav, modifier = Modifier.weight(1f)) {
+                    favOnly = false
+                }
             }
             Box(
                 Modifier
@@ -112,17 +128,17 @@ fun ChannelDrawer(
                 // Alt bilgi satırı ("Telefonla Yönet") her zaman görünür kalsın.
                 modifier = Modifier.weight(1f),
             ) {
-                itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel ->
+                itemsIndexed(display, key = { _, channel -> channel.id }) { index, channel ->
                     ChannelRow(
                         channel = channel,
                         isCurrent = channel.number == currentNumber,
-                        modifier = if (index == currentIndex) {
+                        modifier = if (index == focusRow) {
                             Modifier.focusRequester(initialFocus)
                         } else {
                             Modifier
                         },
                     ) {
-                        onSelect(index)
+                        onSelect(channels.indexOf(channel))
                     }
                 }
             }
@@ -144,6 +160,42 @@ fun ChannelDrawer(
                 .fillMaxHeight()
                 .width(1.dp)
                 .background(AntenaColors.Border),
+        )
+    }
+}
+
+/** Çekmece üstündeki "Özel Liste" / "Tüm Kanallar" sekmesi. */
+@Composable
+private fun DrawerTab(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        modifier
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(onClick = onClick)
+            .background(if (focused) AntenaColors.OverlayScrim else Color.Transparent)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            label,
+            style = AntenaType.DrawerNumber,
+            color = when {
+                selected -> AntenaColors.Accent
+                focused -> AntenaColors.TextPrimary
+                else -> AntenaColors.TextSecondary
+            },
+        )
+        Box(
+            Modifier
+                .padding(top = 6.dp)
+                .width(44.dp)
+                .height(2.dp)
+                .background(if (selected) AntenaColors.Accent else Color.Transparent),
         )
     }
 }

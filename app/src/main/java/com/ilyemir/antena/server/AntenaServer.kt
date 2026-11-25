@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 import androidx.core.content.getSystemService
 import com.ilyemir.antena.R
+import com.ilyemir.antena.data.ChannelRepository
 import com.ilyemir.antena.data.db.ChannelEntity
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -67,6 +68,8 @@ class AntenaServer(
         put("backupUrl", backupUrl ?: JSONObject.NULL)
         put("group", group ?: JSONObject.NULL)
         put("hidden", hidden)
+        put("isFavorite", isFavorite)
+        put("favoriteOrder", favoriteOrder)
     }
 
     private fun Route.routes() {
@@ -120,14 +123,18 @@ class AntenaServer(
 
         post("/api/channels/order") {
             val body = JSONArray(call.receiveText())
-            val order = ArrayList<Pair<Long, Int>>(body.length())
+            val patches = ArrayList<ChannelRepository.OrderPatch>(body.length())
             for (i in 0 until body.length()) {
                 val item = body.optJSONObject(i) ?: continue
                 val id = item.optLong("id")
-                val number = item.optInt("number", i + 1)
-                if (id > 0) order += id to number
+                if (id <= 0) continue
+                patches += ChannelRepository.OrderPatch(
+                    id = id,
+                    number = if (item.has("number")) item.optInt("number") else null,
+                    favoriteOrder = if (item.has("favoriteOrder")) item.optInt("favoriteOrder") else null,
+                )
             }
-            val changed = withContext(Dispatchers.IO) { container.repository.reorder(order) }
+            val changed = withContext(Dispatchers.IO) { container.repository.applyOrder(patches) }
             call.respondText(ok("($changed) kanal yeniden sıralandı").toString(), ContentType.Application.Json)
         }
 
@@ -135,6 +142,7 @@ class AntenaServer(
             val body = JSONObject(call.receiveText())
             val id = body.optLong("id")
             val hidden = if (body.has("hidden")) body.getBoolean("hidden") else null
+            val isFavorite = if (body.has("isFavorite")) body.getBoolean("isFavorite") else null
             val patched = withContext(Dispatchers.IO) {
                 container.repository.patch(
                     id = id,
@@ -142,6 +150,7 @@ class AntenaServer(
                     url = body.optString("url").takeIf { it.isNotEmpty() },
                     backupUrl = if (body.has("backupUrl")) body.optString("backupUrl") else null,
                     hidden = hidden,
+                    isFavorite = isFavorite,
                 )
             }
             call.respondText(

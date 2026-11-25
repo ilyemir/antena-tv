@@ -8,6 +8,7 @@ import com.ilyemir.antena.server.AntenaRuntime
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -23,6 +24,10 @@ class AntenaViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _lastChannelNumber = MutableStateFlow(1)
     val lastChannelNumber: StateFlow<Int> = _lastChannelNumber
+
+    /** Gömülü havuz ilk açılışta yüklenirken Setup ekranı bir anlığına görünmesin. */
+    private val _bootstrapping = MutableStateFlow(true)
+    val bootstrapping: StateFlow<Boolean> = _bootstrapping
 
     val m3uUrl: StateFlow<String> = repository.m3uUrl
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
@@ -55,6 +60,16 @@ class AntenaViewModel(application: Application) : AndroidViewModel(application) 
     init {
         viewModelScope.launch {
             repository.lastChannelNumber.collect { _lastChannelNumber.value = it }
+        }
+        // İlk açılış: veritabanı boşsa gömülü Türk kanal havuzunu otomatik yükle;
+        // kullanıcı M3U adresi beklemeden doğrudan 001 kanalından yayına başlar.
+        viewModelScope.launch {
+            val loaded = repository.channels.first()
+            val neverConfigured = repository.m3uUrl.first().isEmpty()
+            if (loaded.isEmpty() && neverConfigured) {
+                repository.importEmbeddedDefaults()
+            }
+            _bootstrapping.value = false
         }
     }
 

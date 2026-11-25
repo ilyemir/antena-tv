@@ -24,6 +24,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -37,7 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -107,16 +108,23 @@ fun PlayerScreen(
     val aspectMode by viewModel.aspectMode.collectAsState()
     val sleepMinutes by viewModel.sleepMinutes.collectAsState()
 
+    // Web paneli komutları LaunchedEffect(Unit) içinde toplanır; eski kompozisyonun
+    // kanal listesini/konumunu (stale closure) yakalamamak için tüm yardımcı fonksiyonlar
+    // güncel değerleri rememberUpdatedState üzerinden okur.
+    val latestChannels by rememberUpdatedState(channels)
+    val latestPosition by rememberUpdatedState(position.coerceIn(0, (channelCount - 1).coerceAtLeast(0)))
+
     fun tuneToIndex(index: Int) {
-        if (index in channels.indices && index != position) {
-            previousPosition = position
+        val current = latestPosition
+        if (index in latestChannels.indices && index != current) {
+            previousPosition = current
             position = index
         }
     }
 
     /** Önceki kanal hafızası (recall): tek tuşla az önce izlenen kanala dön. */
     fun recallPrevious() {
-        if (previousPosition in channels.indices) tuneToIndex(previousPosition)
+        if (previousPosition in latestChannels.indices) tuneToIndex(previousPosition)
     }
 
     fun cycleAspect() {
@@ -125,13 +133,14 @@ fun PlayerScreen(
     }
 
     fun tuneToNumber(digits: String) {
+        val list = latestChannels
         val number = digits.toIntOrNull() ?: return
-        val exact = channels.indexOfFirst { it.number == number }
+        val exact = list.indexOfFirst { it.number == number }
         if (exact >= 0) {
             tuneToIndex(exact)
             return
         }
-        val prefix = channels.indexOfFirst { it.number.toString().startsWith(digits) }
+        val prefix = list.indexOfFirst { it.number.toString().startsWith(digits) }
         if (prefix >= 0) tuneToIndex(prefix)
     }
 
@@ -146,19 +155,24 @@ fun PlayerScreen(
         }
     }
 
-    /** Yukarı/Aşağı: ana listenin (ilk 15 kanal) içinde sonsuz döngü. */
+    /**
+     * Zap halkası: Özel Liste (Ana Akış) doluysa yalnızca onun içinde `favoriteOrder`
+     * sırasına göre, boşsa tüm kanallar arasında numara sırasıyla kesintisiz döner.
+     * O anki kanal halkanın dışındaysa +1 ilk halka elemanına, -1 sonuncusuna atlar.
+     */
     fun zap(delta: Int) {
-        if (channelCount == 0) return
-        val mainSize = minOf(MAIN_LIST_SIZE, channelCount)
-        val mainList = channels.subList(0, mainSize)
-        val currentIndex = mainList.indexOfFirst { it.number == channel.number }
-        tuneToIndex(
-            when {
-                currentIndex < 0 && delta > 0 -> 0
-                currentIndex < 0 -> mainSize - 1
-                else -> (currentIndex + delta).mod(mainSize)
-            },
-        )
+        val list = latestChannels
+        if (list.isEmpty()) return
+        val favorites = list.filter { it.isFavorite }.sortedBy { it.favoriteOrder }
+        val ring = favorites.ifEmpty { list.sortedBy { it.number } }
+        val currentNumber = list.getOrNull(latestPosition)?.number
+        val currentIndex = ring.indexOfFirst { it.number == currentNumber }
+        val target = when {
+            currentIndex < 0 && delta > 0 -> ring.first()
+            currentIndex < 0 -> ring.last()
+            else -> ring[(currentIndex + delta).mod(ring.size)]
+        }
+        tuneToIndex(list.indexOfFirst { it.number == target.number })
     }
 
     // Debounce'lu yayın başlatma: hızlı zap sırasında her akış yüklenmez;
@@ -194,19 +208,22 @@ fun PlayerScreen(
         }
     }
 
-    // Web panelinden ("Antena Remote") gelen kumanda komutları
-    LaunchedEffect(Unit) {
-        AntenaRuntime.commands.collect { cmd ->
-            when (cmd) {
-                RemoteCmd.ChannelUp -> zap(+1)
-                RemoteCmd.ChannelDown -> zap(-1)
-                is RemoteCmd.Digit -> appendDigit('0' + cmd.value)
-                RemoteCmd.ClearDigits -> numBuffer = ""
-                RemoteCmd.Previous -> recallPrevious()
-                RemoteCmd.ToggleAspect -> cycleAspect()
-                RemoteCmd.Exit -> exitHintVisible = true
-            }
+    // Web panelinden ("Antena Remote") gelen kumanda komutları.
+    // commands zaten MutableSharedFlow(extraBufferCapacity = 32) — peş peşe basılan
+    // tuşlar yutulmaz; işleyici de her yeniden kurulda tazelenip güncel zap'ı çağırır.
+    val handleRemote by rememberUpdatedState<(RemoteCmd) -> Unit> { cmd ->
+        when (cmd) {
+            RemoteCmd.ChannelUp -> zap(+1)
+            RemoteCmd.ChannelDown -> zap(-1)
+            is RemoteCmd.Digit -> appendDigit('0' + cmd.value)
+            RemoteCmd.ClearDigits -> numBuffer = ""
+            RemoteCmd.Previous -> recallPrevious()
+            RemoteCmd.ToggleAspect -> cycleAspect()
+            RemoteCmd.Exit -> exitHintVisible = true
         }
+    }
+    LaunchedEffect(Unit) {
+        AntenaRuntime.commands.collect { handleRemote(it) }
     }
 
     // Uyku zamanlayıcısı: süre dolunca uygulama kapanır (0 = kapalı)
@@ -268,9 +285,10 @@ fun PlayerScreen(
             .background(Color.Black)
             .focusRequester(rootFocus)
             .focusable()
-            .onKeyEvent { event ->
-                if (showManage || showDrawer || showNumPad) return@onKeyEvent false
-                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+            .onPreviewKeyEvent { event ->
+                // Kök odakta olduğu sürece tuşlar hiçbir çocuğa (PlayerView vb.) gitmez.
+                if (showManage || showDrawer || showNumPad) return@onPreviewKeyEvent false
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 // Gizli kombinasyon ▲▲▼▼OK: kilit modu açıkken bile yönetim ekranını açar.
                 var comboFired = false
                 comboRun = when {
@@ -283,19 +301,21 @@ fun PlayerScreen(
                     }
                     else -> 0
                 }
-                if (comboFired) return@onKeyEvent true
+                if (comboFired) return@onPreviewKeyEvent true
                 // Yeşil tuş: görüntü oranını döndür (Ekrana Sığdır → Tam Ekran → Germe → Orijinal)
                 if (event.nativeKeyEvent.keyCode == GREEN_KEY_CODE) {
                     cycleAspect()
-                    return@onKeyEvent true
+                    return@onPreviewKeyEvent true
                 }
                 when (event.key) {
-                    Key.DirectionUp, Key.ChannelDown -> {
-                        zap(-1)
+                    // Geleneksel TV standardı: Yukarı / CH+ sonraki kanala,
+                    // Aşağı / CH- önceki kanala geçer.
+                    Key.DirectionUp, Key.ChannelUp -> {
+                        zap(+1)
                         true
                     }
-                    Key.DirectionDown, Key.ChannelUp -> {
-                        zap(+1)
+                    Key.DirectionDown, Key.ChannelDown -> {
+                        zap(-1)
                         true
                     }
                     Key.DirectionLeft, Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
@@ -516,8 +536,7 @@ private val KEY_DIGITS = mapOf(
     Key.NumPad8 to '8', Key.NumPad9 to '9',
 )
 
-/** Ana Zap Döngüsü: Yukarı/Aşağı yalnızca bu kadar kanal içinde döner. */
-private const val MAIN_LIST_SIZE = 15
+/** Ana Zap Döngüsü sabiti kaldırıldı: döngü artık Özel Liste / tüm kanallar. */
 private const val GREEN_KEY_CODE = 184 // KeyEvent.KEYCODE_GREEN
 private const val ZAP_DEBOUNCE_MS = 250L
 private const val OSD_DURATION_MS = 3_500L

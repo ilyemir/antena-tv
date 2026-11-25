@@ -97,6 +97,15 @@ select{appearance:none;-webkit-appearance:none;background-image:none}
 .adv label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);display:block;margin:8px 0 4px}
 .adv input{margin-bottom:2px}
 
+.seg{display:flex;border:1px solid var(--border)}
+.seg button{
+  flex:1;background:var(--bg);border:0;color:var(--muted);
+  font-family:'Space Grotesk',sans-serif;font-weight:500;font-size:12px;letter-spacing:.12em;
+  padding:11px 4px;text-transform:uppercase;
+}
+.seg button + button{border-left:1px solid var(--border)}
+.seg button.on{background:var(--surface);color:var(--amber)}
+
 .switch{position:relative;width:52px;height:30px;flex:none}
 .switch input{opacity:0;width:0;height:0;position:absolute}
 .switch i{position:absolute;inset:0;background:var(--bg);border:1px solid var(--border);display:block}
@@ -169,8 +178,12 @@ select{appearance:none;-webkit-appearance:none;background-image:none}
   <!-- KANALLAR -->
   <section id="ch">
     <div class="card">
-      <div class="row">
-        <span class="label">Sıra (tut &amp; sürükle veya oklar)</span>
+      <div class="seg" id="chView">
+        <button data-view="fav">Özel Liste</button>
+        <button data-view="all">Tüm Kanallar</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span class="label" id="chHint">Zap bu listenin içinde döner</span>
         <span class="spacer"></span>
         <span class="label mono" id="chCount">0</span>
       </div>
@@ -299,32 +312,54 @@ $('[data-clear]').addEventListener('click', async () => {
   say($('#rcStatus'), 'temizlendi');
 });
 
-/* ---- kanal editörü ---- */
-let channels = [];
+/* ---- kanal editörü (Özel Liste / Tüm Kanallar) ---- */
+let channels = [];   // sunucudan gelen tam liste
+let view = 'fav';    // 'fav' | 'all' — varsayılan: zap halkası
+let effView = 'all'; // fav seçili ama favori yoksa fiilen 'all' çalışır
+let viewList = [];   // görünen + sürüklenen aktif liste
 let orderDirty = false;
+
+$('#chView').querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+  view = btn.dataset.view;
+  rebuildView();
+}));
 
 async function loadChannels(){
   channels = await api('/api/channels');
-  $('#chCount').textContent = channels.length + ' kanal';
+  channels.sort((a, b) => a.number - b.number);
+  rebuildView();
+}
+
+function rebuildView(){
+  const favs = channels.filter(c => c.isFavorite).sort((a, b) => a.favoriteOrder - b.favoriteOrder);
+  effView = (view === 'fav' && favs.length) ? 'fav' : 'all';
+  viewList = effView === 'fav' ? favs : channels.slice();
+  $('#chView').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.view === effView));
+  $('#chCount').textContent = viewList.length + ' / ' + channels.length + ' kanal';
+  $('#chHint').textContent = effView === 'fav'
+    ? 'Zap bu listenin içinde döner · sırayı sürükleyerek değiştir'
+    : 'Genel numara sırası · ★ ile Özel Listeye ekle';
   renderChannels();
 }
 
 function renderChannels(){
   const host = $('#chList');
   host.innerHTML = '';
-  channels.forEach((ch, idx) => {
+  viewList.forEach((ch, idx) => {
     const wrap = document.createElement('div');
     wrap.className = 'ch-wrap';
     const row = document.createElement('div');
     row.className = 'ch' + (ch.hidden ? ' hidden-ch' : '');
     row.dataset.id = ch.id;
+    const shownNo = effView === 'fav' ? idx + 1 : ch.number;
     row.innerHTML =
       '<div class="handle mono">::</div>' +
-      '<div class="no mono">' + String(idx+1).padStart(3,'0') + '</div>' +
+      '<div class="no mono">' + String(shownNo).padStart(3,'0') + '</div>' +
       '<div class="name"><input value="' + esc(ch.name) + '" aria-label="kanal adı"><small>' + esc(String(ch.group||'')) + '</small></div>' +
       '<div class="ops">' +
         '<button data-op="up"' + (idx===0?' disabled':'') + '>YUKARI</button>' +
-        '<button data-op="down"' + (idx===channels.length-1?' disabled':'') + '>AŞAĞI</button>' +
+        '<button data-op="down"' + (idx===viewList.length-1?' disabled':'') + '>AŞAĞI</button>' +
+        '<button data-op="fav" class="' + (ch.isFavorite ? 'act' : '') + '">' + (ch.isFavorite ? '★ ÇIKAR' : '★ EKLE') + '</button>' +
         '<button data-op="hide">' + (ch.hidden ? 'GÖSTER' : 'GİZLE') + '</button>' +
         '<button data-op="adv">ADRES</button>' +
       '</div>';
@@ -348,15 +383,17 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').r
 async function patchCh(id, fields, msg){
   const r = await api('/api/channels/patch', Object.assign({id}, fields));
   say($('#chStatus'), r.ok ? msg : ('hata: ' + (r.error || '?')), !r.ok);
-  if (r.ok && fields.hidden !== undefined) loadChannels();
+  if (r.ok && (fields.hidden !== undefined || fields.isFavorite !== undefined)) loadChannels();
 }
 
 async function operate(op, idx, ch, row, wrap){
   if (op === 'up' || op === 'down'){
     const to = op === 'up' ? idx-1 : idx+1;
-    if (to < 0 || to >= channels.length) return;
-    const tmp = channels[idx]; channels[idx] = channels[to]; channels[to] = tmp;
+    if (to < 0 || to >= viewList.length) return;
+    const tmp = viewList[idx]; viewList[idx] = viewList[to]; viewList[to] = tmp;
     markOrderDirty(); renderChannels();
+  } else if (op === 'fav'){
+    await patchCh(ch.id, {isFavorite: !ch.isFavorite}, ch.isFavorite ? 'Özel Listeden çıkarıldı' : 'Özel Listeye eklendi');
   } else if (op === 'hide'){
     await patchCh(ch.id, {hidden: !ch.hidden}, ch.hidden ? 'kanal görünür' : 'kanal gizlendi');
   } else if (op === 'adv'){
@@ -371,7 +408,9 @@ function markOrderDirty(){
 }
 
 $('#saveOrder').addEventListener('click', async () => {
-  const order = channels.map((c, i) => ({id: c.id, number: i+1}));
+  // Özel Liste görünümünde favoriteOrder, genel görünümde number güncellenir.
+  const order = viewList.map((c, i) =>
+    effView === 'fav' ? {id: c.id, favoriteOrder: i+1} : {id: c.id, number: i+1});
   const r = await api('/api/channels/order', order);
   say($('#chStatus'), r.ok ? ('sıra kaydedildi ' + (r.message||'')) : ('hata: ' + (r.error||'?')), !r.ok);
   if (r.ok){ orderDirty = false; $('#orderBar').hidden = true; loadChannels(); }
@@ -393,20 +432,22 @@ function makeDraggable(row, idx){
     if (Math.abs(dy) < 8) return;
     const dir = dy > 0 ? 1 : -1;
     const to = idx + dir;
-    if (to < 0 || to >= channels.length) return;
+    if (to < 0 || to >= viewList.length) return;
     const rows = [...$('#chList').children];
-    const currentIdx = channels.indexOf(channels.find(c => c.id == row.dataset.id));
+    const currentIdx = viewList.indexOf(viewList.find(c => c.id == row.dataset.id));
     const target = rows[currentIdx + dir];
     if (!target) return;
     const rect = target.querySelector('.ch').getBoundingClientRect();
     const past = dir > 0 ? e.clientY > rect.top + rect.height/2 : e.clientY < rect.top + rect.height/2;
     if (!past) return;
-    const moved = channels.splice(currentIdx, 1)[0];
-    channels.splice(currentIdx + dir, 0, moved);
+    const moved = viewList.splice(currentIdx, 1)[0];
+    viewList.splice(currentIdx + dir, 0, moved);
     idx = currentIdx + dir;
     target.after ? (dir > 0 ? target.after(row.parentElement) : row.parentElement.before(target)) : null;
     // numaraları tazele
-    [...$('#chList').querySelectorAll('.no')].forEach((el, i) => el.textContent = String(i+1).padStart(3,'0'));
+    [...$('#chList').querySelectorAll('.no')].forEach((el, i) => {
+      el.textContent = String(effView === 'fav' ? i+1 : viewList[i].number).padStart(3,'0');
+    });
     startY = e.clientY;
     markOrderDirty();
   });

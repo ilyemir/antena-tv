@@ -39,9 +39,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AntenaApp(viewModel: AntenaViewModel = viewModel()) {
     val channels by viewModel.channels.collectAsState()
+    val bootstrapping by viewModel.bootstrapping.collectAsState()
     when {
-        // Veritabanı henüz okunmadı
-        channels == null -> Splash()
+        // Veritabanı henüz okunmadı veya gömülü havuz ilk açılışta yükleniyor
+        channels == null || (channels!!.isEmpty() && bootstrapping) -> Splash()
 
         // Kurulum: hiç kanal yoksa M3U listesi adresi istenir
         channels!!.isEmpty() -> SetupScreen(viewModel)

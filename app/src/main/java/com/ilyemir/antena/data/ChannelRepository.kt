@@ -16,6 +16,7 @@ import java.net.URI
  */
 class ChannelRepository(context: Context) {
 
+    private val appContext = context.applicationContext
     private val dao = AntenaDatabase.get(context).channelDao()
     private val settings = SettingsStore(context)
 
@@ -39,58 +40,100 @@ class ChannelRepository(context: Context) {
      */
     suspend fun importFromUrl(url: String): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
-            val text = downloadText(url)
-            val entries = M3uParser.parse(text)
-            require(entries.isNotEmpty()) { "Listede kanal bulunamadı" }
-
-            val entities = ArrayList<ChannelEntity>(entries.size)
-            for (entry in entries) {
-                val previous = entities.lastOrNull()
-                if (previous != null &&
-                    previous.backupUrl == null &&
-                    previous.name.equals(entry.name, ignoreCase = true)
-                ) {
-                    entities[entities.size - 1] = previous.copy(backupUrl = entry.url)
-                } else {
-                    entities += ChannelEntity(
-                        number = entities.size + 1,
-                        name = entry.name,
-                        url = entry.url,
-                        group = entry.group,
-                        userAgent = entry.userAgent,
-                        referrer = entry.referrer,
-                    )
-                }
-            }
+            val entities = buildEntities(downloadText(url))
             dao.replaceAll(entities)
             settings.setM3uUrl(url)
             entities.size
         }
     }
 
-    /** Web panelinden gelen sıralama: (kanal id -> yeni numara). */
-    suspend fun reorder(order: List<Pair<Long, Int>>) = withContext(Dispatchers.IO) {
+    /**
+     * APK'ya gömülü, çok kaynaklı doğrulanmış Türk kanal havuzunu içe aktarır
+     * (assets/default_tr.m3u + default_favorites.txt). İlk açılışta otomatik çağrılır;
+     * böylece kullanıcı M3U adresi beklemeden doğrudan 001 kanalından yayına başlar.
+     */
+    suspend fun importEmbeddedDefaults(): Int = withContext(Dispatchers.IO) {
+        val text = appContext.assets.open("default_tr.m3u")
+            .bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val favorites = appContext.assets.open("default_favorites.txt")
+            .bufferedReader(Charsets.UTF_8).use { it.readLines() }
+            .map { it.trim() }.filter { it.isNotEmpty() }
+
+        val favRank = favorites.withIndex()
+            .associate { (index, name) -> name.lowercase() to index + 1 }
+        val entities = buildEntities(text).map { channel ->
+            favRank[channel.name.lowercase()]
+                ?.let { channel.copy(isFavorite = true, favoriteOrder = it) }
+                ?: channel
+        }
+        dao.replaceAll(entities)
+        entities.size
+    }
+
+    /** M3U metninden numaralandırılmış kanal listesi üretir (yedek adres sezgisi dahil). */
+    private fun buildEntities(text: String): List<ChannelEntity> {
+        val entries = M3uParser.parse(text)
+        require(entries.isNotEmpty()) { "Listede kanal bulunamadı" }
+
+        val entities = ArrayList<ChannelEntity>(entries.size)
+        for (entry in entries) {
+            val previous = entities.lastOrNull()
+            if (previous != null &&
+                previous.backupUrl == null &&
+                previous.name.equals(entry.name, ignoreCase = true)
+            ) {
+                entities[entities.size - 1] = previous.copy(backupUrl = entry.url)
+            } else {
+                entities += ChannelEntity(
+                    number = entities.size + 1,
+                    name = entry.name,
+                    url = entry.url,
+                    group = entry.group,
+                    userAgent = entry.userAgent,
+                    referrer = entry.referrer,
+                )
+            }
+        }
+        return entities
+    }
+
+    /** Panel sıralama yaması: number = genel sıra, favoriteOrder = Özel Liste sırası. */
+    data class OrderPatch(val id: Long, val number: Int? = null, val favoriteOrder: Int? = null)
+
+    suspend fun applyOrder(patches: List<OrderPatch>) = withContext(Dispatchers.IO) {
         val byId = dao.getAll().associateBy { it.id }
-        val updated = order.mapNotNull { (id, number) -> byId[id]?.copy(number = number) }
+        val updated = patches.mapNotNull { patch ->
+            byId[patch.id]?.copy(
+                number = patch.number ?: byId.getValue(patch.id).number,
+                favoriteOrder = patch.favoriteOrder ?: byId.getValue(patch.id).favoriteOrder,
+            )
+        }
         if (updated.isNotEmpty()) dao.updateAll(updated)
         updated.size
     }
 
-    /** Tek kanalda isim / yayın adresi / yedek adresi / görünürlük düzenlemesi. */
+    /** Tek kanalda isim / yayın adresi / yedek adresi / görünürlük / favori düzenlemesi. */
     suspend fun patch(
         id: Long,
         name: String? = null,
         url: String? = null,
         backupUrl: String? = null,
         hidden: Boolean? = null,
+        isFavorite: Boolean? = null,
     ): Boolean = withContext(Dispatchers.IO) {
         val current = dao.getById(id) ?: return@withContext false
+        var favoriteOrder = current.favoriteOrder
+        if (isFavorite == true && favoriteOrder <= 0) {
+            favoriteOrder = (dao.getAll().maxOfOrNull { it.favoriteOrder } ?: 0) + 1
+        }
         dao.update(
             current.copy(
                 name = name?.trim()?.ifEmpty { null } ?: current.name,
                 url = url?.trim()?.ifEmpty { null } ?: current.url,
                 backupUrl = backupUrl?.trim()?.ifEmpty { null } ?: current.backupUrl,
                 hidden = hidden ?: current.hidden,
+                isFavorite = isFavorite ?: current.isFavorite,
+                favoriteOrder = favoriteOrder,
             ),
         )
         true
@@ -176,12 +219,14 @@ class ChannelRepository(context: Context) {
                     put("userAgent", channel.userAgent ?: org.json.JSONObject.NULL)
                     put("referrer", channel.referrer ?: org.json.JSONObject.NULL)
                     put("hidden", channel.hidden)
+                    put("isFavorite", channel.isFavorite)
+                    put("favoriteOrder", channel.favoriteOrder)
                 },
             )
         }
         org.json.JSONObject()
             .put("app", "antena")
-            .put("version", 1)
+            .put("version", 2)
             .put("source", m3uUrlFirst())
             .put("channels", array)
             .toString(2)
@@ -209,6 +254,8 @@ class ChannelRepository(context: Context) {
                 userAgent = item.optString("userAgent").takeIf { it.isNotEmpty() && it != "null" },
                 referrer = item.optString("referrer").takeIf { it.isNotEmpty() && it != "null" },
                 hidden = item.optBoolean("hidden", false),
+                isFavorite = item.optBoolean("isFavorite", false),
+                favoriteOrder = item.optInt("favoriteOrder", 0),
             )
         }
         require(entities.isNotEmpty()) { "Yedekte geçerli kanal yok" }

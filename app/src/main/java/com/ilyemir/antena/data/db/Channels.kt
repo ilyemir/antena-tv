@@ -29,6 +29,10 @@ data class ChannelEntity(
     val referrer: String? = null,
     /** Misafir/Yaşlı Kilit Modu ve Remote panelinden gizlenebilir. */
     val hidden: Boolean = false,
+    /** Özel Liste (Ana Akış) üyesi; zap varsayılan olarak bu listenin içinde döner. */
+    val isFavorite: Boolean = false,
+    /** Özel Liste içindeki sıra (1..n); yalnızca isFavorite=true iken anlam taşır. */
+    val favoriteOrder: Int = 0,
 )
 
 @Dao
@@ -64,7 +68,7 @@ interface ChannelDao {
     }
 }
 
-@Database(entities = [ChannelEntity::class], version = 1, exportSchema = false)
+@Database(entities = [ChannelEntity::class], version = 2, exportSchema = false)
 abstract class AntenaDatabase : RoomDatabase() {
     abstract fun channelDao(): ChannelDao
 
