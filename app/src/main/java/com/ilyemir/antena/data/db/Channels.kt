@@ -39,6 +39,9 @@ interface ChannelDao {
     @Query("SELECT * FROM channels ORDER BY number ASC")
     suspend fun getAll(): List<ChannelEntity>
 
+    @Query("SELECT * FROM channels WHERE id = :id")
+    suspend fun getById(id: Long): ChannelEntity?
+
     @Query("SELECT COUNT(*) FROM channels")
     suspend fun count(): Int
 
@@ -50,6 +53,9 @@ interface ChannelDao {
 
     @Update
     suspend fun update(channel: ChannelEntity)
+
+    @Update
+    suspend fun updateAll(channels: List<ChannelEntity>)
 
     @Transaction
     suspend fun replaceAll(channels: List<ChannelEntity>) {

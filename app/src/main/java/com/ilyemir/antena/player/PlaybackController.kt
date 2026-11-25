@@ -1,6 +1,7 @@
 package com.ilyemir.antena.player
 
 import android.content.Context
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -73,6 +74,9 @@ class PlaybackController(context: Context) : Player.Listener {
 
         player = ExoPlayer.Builder(context, renderersFactory)
             .setLoadControl(loadControl)
+            // 50 Hz yayınları destekleyen ekranlarda yenileme hızını yayına uydurur
+            // (API 31+ Surface.setFrameRate; eski ROM'larda sessizce yok sayılır).
+            .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS)
             .build()
             .apply { addListener(this@PlaybackController) }
     }

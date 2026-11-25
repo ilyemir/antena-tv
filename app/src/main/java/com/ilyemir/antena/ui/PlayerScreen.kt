@@ -47,10 +47,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Text
+import com.ilyemir.antena.AntenaViewModel
 import com.ilyemir.antena.data.db.ChannelEntity
 import com.ilyemir.antena.player.PlaybackController
+import com.ilyemir.antena.server.AntenaRuntime
+import com.ilyemir.antena.server.RemoteCmd
 import com.ilyemir.antena.ui.theme.AntenaColors
 import com.ilyemir.antena.ui.theme.AntenaType
 import kotlinx.coroutines.delay
@@ -70,9 +74,9 @@ import java.util.Locale
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
+    viewModel: AntenaViewModel,
     channels: List<ChannelEntity>,
     initialChannelNumber: Int,
-    onChannelChanged: (Int) -> Unit,
 ) {
     val context = LocalContext.current
     val channelCount = channels.size
@@ -96,9 +100,28 @@ fun PlayerScreen(
     var osdVisible by remember { mutableStateOf(true) }
     var exitHintVisible by remember { mutableStateOf(false) }
     var osdNonce by remember { mutableIntStateOf(0) }
+    var showManage by remember { mutableStateOf(false) }
+    var previousPosition by remember { mutableIntStateOf(-1) }
+    var comboRun by remember { mutableIntStateOf(0) }
+    val guestMode by viewModel.guestMode.collectAsState()
+    val aspectMode by viewModel.aspectMode.collectAsState()
+    val sleepMinutes by viewModel.sleepMinutes.collectAsState()
 
     fun tuneToIndex(index: Int) {
-        if (index in channels.indices) position = index
+        if (index in channels.indices && index != position) {
+            previousPosition = position
+            position = index
+        }
+    }
+
+    /** Önceki kanal hafızası (recall): tek tuşla az önce izlenen kanala dön. */
+    fun recallPrevious() {
+        if (previousPosition in channels.indices) tuneToIndex(previousPosition)
+    }
+
+    fun cycleAspect() {
+        viewModel.cycleAspect()
+        osdNonce++
     }
 
     fun tuneToNumber(digits: String) {
@@ -129,11 +152,13 @@ fun PlayerScreen(
         val mainSize = minOf(MAIN_LIST_SIZE, channelCount)
         val mainList = channels.subList(0, mainSize)
         val currentIndex = mainList.indexOfFirst { it.number == channel.number }
-        position = when {
-            currentIndex < 0 && delta > 0 -> 0
-            currentIndex < 0 -> mainSize - 1
-            else -> (currentIndex + delta).mod(mainSize)
-        }
+        tuneToIndex(
+            when {
+                currentIndex < 0 && delta > 0 -> 0
+                currentIndex < 0 -> mainSize - 1
+                else -> (currentIndex + delta).mod(mainSize)
+            },
+        )
     }
 
     // Debounce'lu yayın başlatma: hızlı zap sırasında her akış yüklenmez;
@@ -141,7 +166,7 @@ fun PlayerScreen(
     LaunchedEffect(channel.id) {
         delay(ZAP_DEBOUNCE_MS)
         controller.play(channel)
-        onChannelChanged(channel.number)
+        viewModel.setLastChannelNumber(channel.number)
     }
 
     // OSD: kanal değişince göster, 3,5 sn sonra kendini gizle
@@ -169,6 +194,29 @@ fun PlayerScreen(
         }
     }
 
+    // Web panelinden ("Antena Remote") gelen kumanda komutları
+    LaunchedEffect(Unit) {
+        AntenaRuntime.commands.collect { cmd ->
+            when (cmd) {
+                RemoteCmd.ChannelUp -> zap(+1)
+                RemoteCmd.ChannelDown -> zap(-1)
+                is RemoteCmd.Digit -> appendDigit('0' + cmd.value)
+                RemoteCmd.ClearDigits -> numBuffer = ""
+                RemoteCmd.Previous -> recallPrevious()
+                RemoteCmd.ToggleAspect -> cycleAspect()
+                RemoteCmd.Exit -> exitHintVisible = true
+            }
+        }
+    }
+
+    // Uyku zamanlayıcısı: süre dolunca uygulama kapanır (0 = kapalı)
+    LaunchedEffect(sleepMinutes) {
+        if (sleepMinutes > 0) {
+            delay(sleepMinutes * 60_000L)
+            (context as? Activity)?.finish()
+        }
+    }
+
     // Uygulama arka plana geçince duraklat, dönünce sürdür
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, controller) {
@@ -186,6 +234,7 @@ fun PlayerScreen(
     // Çift Geri koruması: çekmece/NumPad açıksa kapat; değilse önce uyarı, tekrarında çık.
     BackHandler {
         when {
+            showManage -> showManage = false
             showDrawer -> showDrawer = false
             showNumPad -> {
                 showNumPad = false
@@ -197,8 +246,8 @@ fun PlayerScreen(
     }
 
     val rootFocus = remember { FocusRequester() }
-    LaunchedEffect(showDrawer, showNumPad) {
-        if (!showDrawer && !showNumPad) runCatching { rootFocus.requestFocus() }
+    LaunchedEffect(showDrawer, showNumPad, showManage) {
+        if (!showDrawer && !showNumPad && !showManage) runCatching { rootFocus.requestFocus() }
     }
 
     // Çekmece/NumPad kapanınca OSD yeniden görünür: girilen kanal numarası onaylanır.
@@ -220,8 +269,26 @@ fun PlayerScreen(
             .focusRequester(rootFocus)
             .focusable()
             .onKeyEvent { event ->
-                if (showDrawer || showNumPad) return@onKeyEvent false
+                if (showManage || showDrawer || showNumPad) return@onKeyEvent false
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                // Gizli kombinasyon ▲▲▼▼OK: kilit modu açıkken bile yönetim ekranını açar.
+                var comboFired = false
+                comboRun = when {
+                    event.key == Key.DirectionUp && (comboRun == 0 || comboRun == 1) -> comboRun + 1
+                    event.key == Key.DirectionDown && (comboRun == 2 || comboRun == 3) -> comboRun + 1
+                    event.key == Key.DirectionCenter && comboRun == 4 -> {
+                        showManage = true
+                        comboFired = true
+                        0
+                    }
+                    else -> 0
+                }
+                if (comboFired) return@onKeyEvent true
+                // Yeşil tuş: görüntü oranını döndür (Ekrana Sığdır → Tam Ekran → Germe → Orijinal)
+                if (event.nativeKeyEvent.keyCode == GREEN_KEY_CODE) {
+                    cycleAspect()
+                    return@onKeyEvent true
+                }
                 when (event.key) {
                     Key.DirectionUp, Key.ChannelDown -> {
                         zap(-1)
@@ -264,6 +331,14 @@ fun PlayerScreen(
                     setKeepContentOnPlayerReset(true)
                     // Geleneksel TV hissi: dönen yükleme göstergesi yok.
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                }
+            },
+            update = { view ->
+                view.resizeMode = when (aspectMode) {
+                    "fill" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM      // Tam Ekran (kırpma)
+                    "stretch" -> AspectRatioFrameLayout.RESIZE_MODE_FILL   // Germe
+                    "original" -> AspectRatioFrameLayout.RESIZE_MODE_FIXED_HEIGHT
+                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT         // Ekrana Sığdır
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -323,7 +398,7 @@ fun PlayerScreen(
                 .padding(20.dp),
         ) {
             Text(
-                "▲▼ Kanal    OK Liste    ▶ Rakam    Geri Çıkış",
+                "▲▼ Kanal    OK Liste    ▶ Rakam    Yeşil Oran    Geri Çıkış",
                 style = AntenaType.LabelMono,
                 color = AntenaColors.TextSecondary,
             )
@@ -374,6 +449,13 @@ fun PlayerScreen(
                     tuneToIndex(index)
                 },
                 onDismiss = { showDrawer = false },
+                // Kilit modu açıkken yönetim girişi gizlenir (gizli ▲▲▼▼OK çalışmaya devam eder).
+                onManage = if (guestMode) null else {
+                    {
+                        showDrawer = false
+                        showManage = true
+                    }
+                },
             )
         }
 
@@ -396,6 +478,14 @@ fun PlayerScreen(
                     showNumPad = false
                     numBuffer = ""
                 },
+            )
+        }
+
+        // "Telefonla Yönet" ekranı: panel adresi + QR
+        if (showManage) {
+            ManageScreen(
+                port = viewModel.serverPort.takeIf { it > 0 } ?: 8080,
+                onDismiss = { showManage = false },
             )
         }
     }
@@ -428,6 +518,7 @@ private val KEY_DIGITS = mapOf(
 
 /** Ana Zap Döngüsü: Yukarı/Aşağı yalnızca bu kadar kanal içinde döner. */
 private const val MAIN_LIST_SIZE = 15
+private const val GREEN_KEY_CODE = 184 // KeyEvent.KEYCODE_GREEN
 private const val ZAP_DEBOUNCE_MS = 250L
 private const val OSD_DURATION_MS = 3_500L
 private const val EXIT_HINT_MS = 2_500L

@@ -5,6 +5,7 @@ import com.ilyemir.antena.data.db.AntenaDatabase
 import com.ilyemir.antena.data.db.ChannelEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URI
@@ -26,6 +27,11 @@ class ChannelRepository(context: Context) {
     val m3uUrl: Flow<String> = settings.m3uUrl
 
     suspend fun setLastChannelNumber(number: Int) = settings.setLastChannelNumber(number)
+
+    /** Panel yönetimi için gizliler dahil tüm kanallar. */
+    suspend fun allChannels(): List<ChannelEntity> = dao.getAll()
+
+    suspend fun channelCount(): Int = dao.count()
 
     /**
      * M3U adresini indirip veritabanını yeniler. Dönen değer kanal sayısıdır.
@@ -60,6 +66,154 @@ class ChannelRepository(context: Context) {
             settings.setM3uUrl(url)
             entities.size
         }
+    }
+
+    /** Web panelinden gelen sıralama: (kanal id -> yeni numara). */
+    suspend fun reorder(order: List<Pair<Long, Int>>) = withContext(Dispatchers.IO) {
+        val byId = dao.getAll().associateBy { it.id }
+        val updated = order.mapNotNull { (id, number) -> byId[id]?.copy(number = number) }
+        if (updated.isNotEmpty()) dao.updateAll(updated)
+        updated.size
+    }
+
+    /** Tek kanalda isim / yayın adresi / yedek adresi / görünürlük düzenlemesi. */
+    suspend fun patch(
+        id: Long,
+        name: String? = null,
+        url: String? = null,
+        backupUrl: String? = null,
+        hidden: Boolean? = null,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val current = dao.getById(id) ?: return@withContext false
+        dao.update(
+            current.copy(
+                name = name?.trim()?.ifEmpty { null } ?: current.name,
+                url = url?.trim()?.ifEmpty { null } ?: current.url,
+                backupUrl = backupUrl?.trim()?.ifEmpty { null } ?: current.backupUrl,
+                hidden = hidden ?: current.hidden,
+            ),
+        )
+        true
+    }
+
+    data class MergeResult(val updated: Int, val added: Int, val kept: Int)
+
+    /**
+     * Smart Merge: mevcut sıralamayı, özel isimleri ve görünürlüğü BOZMAZ.
+     * Yalnızca adı eşleşen kanalların yayın (ve yoksa yedek) adreslerini yeniler;
+     * listede yeni olan kanalları sona ekler, eskileri silmez.
+     */
+    suspend fun smartMerge(url: String): MergeResult = withContext(Dispatchers.IO) {
+        val entries = M3uParser.parse(downloadText(url))
+        require(entries.isNotEmpty()) { "Listede kanal bulunamadı" }
+
+        // Yeni listedeki aynı adlı tekrarlar: ikinci adres yedek kabul edilir.
+        class Fresh(val entry: M3uEntry, var backup: String?)
+        val incoming = LinkedHashMap<String, Fresh>()
+        for (entry in entries) {
+            val key = entry.name.trim().lowercase()
+            val existing = incoming[key]
+            when {
+                existing == null -> incoming[key] = Fresh(entry, null)
+                existing.backup == null -> existing.backup = entry.url
+            }
+        }
+
+        val existing = dao.getAll().toMutableList()
+        var updated = 0
+        var added = 0
+        val seen = HashSet<String>()
+
+        for (index in existing.indices) {
+            val channel = existing[index]
+            val key = channel.name.trim().lowercase()
+            val fresh = incoming[key]?.entry ?: continue
+            seen += key
+            val merged = channel.copy(
+                url = fresh.url,
+                backupUrl = incoming[key]?.backup ?: channel.backupUrl,
+                userAgent = fresh.userAgent ?: channel.userAgent,
+                referrer = fresh.referrer ?: channel.referrer,
+            )
+            if (merged != channel) {
+                existing[index] = merged
+                updated++
+            }
+        }
+
+        var nextNumber = (existing.maxOfOrNull { it.number } ?: 0) + 1
+        for ((key, fresh) in incoming) {
+            if (key in seen) continue
+            val entry = fresh.entry
+            existing += ChannelEntity(
+                number = nextNumber++,
+                name = entry.name,
+                url = entry.url,
+                backupUrl = fresh.backup,
+                group = entry.group,
+                userAgent = entry.userAgent,
+                referrer = entry.referrer,
+            )
+            added++
+        }
+
+        dao.replaceAll(existing)
+        settings.setM3uUrl(url)
+        MergeResult(updated = updated, added = added, kept = existing.size - updated - added)
+    }
+
+    /** antena_backup.json içeriği. */
+    suspend fun exportJson(): String = withContext(Dispatchers.IO) {
+        val array = org.json.JSONArray()
+        for (channel in dao.getAll()) {
+            array.put(
+                org.json.JSONObject().apply {
+                    put("number", channel.number)
+                    put("name", channel.name)
+                    put("url", channel.url)
+                    put("backupUrl", channel.backupUrl ?: org.json.JSONObject.NULL)
+                    put("group", channel.group ?: org.json.JSONObject.NULL)
+                    put("userAgent", channel.userAgent ?: org.json.JSONObject.NULL)
+                    put("referrer", channel.referrer ?: org.json.JSONObject.NULL)
+                    put("hidden", channel.hidden)
+                },
+            )
+        }
+        org.json.JSONObject()
+            .put("app", "antena")
+            .put("version", 1)
+            .put("source", m3uUrlFirst())
+            .put("channels", array)
+            .toString(2)
+    }
+
+    private suspend fun m3uUrlFirst(): String = settings.m3uUrl.first()
+
+    /** Yedeği geri yükler; mevcut tablonun yerini alır. */
+    suspend fun importJson(json: String): Int = withContext(Dispatchers.IO) {
+        val root = runCatching { org.json.JSONObject(json) }.getOrElse {
+            error("Geçersiz yedek dosyası")
+        }
+        val array = root.optJSONArray("channels") ?: error("Yedekte kanal listesi yok")
+        val entities = ArrayList<ChannelEntity>(array.length())
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val url = item.optString("url")
+            if (url.isEmpty()) continue
+            entities += ChannelEntity(
+                number = item.optInt("number", entities.size + 1),
+                name = item.optString("name").ifEmpty { "Kanal ${entities.size + 1}" },
+                url = url,
+                backupUrl = item.optString("backupUrl").takeIf { it.isNotEmpty() && it != "null" },
+                group = item.optString("group").takeIf { it.isNotEmpty() && it != "null" },
+                userAgent = item.optString("userAgent").takeIf { it.isNotEmpty() && it != "null" },
+                referrer = item.optString("referrer").takeIf { it.isNotEmpty() && it != "null" },
+                hidden = item.optBoolean("hidden", false),
+            )
+        }
+        require(entities.isNotEmpty()) { "Yedekte geçerli kanal yok" }
+        dao.replaceAll(entities)
+        entities.size
     }
 
     private fun downloadText(url: String): String {

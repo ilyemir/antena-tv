@@ -72,4 +72,8 @@ dependencies {
     implementation("io.ktor:ktor-server-core:$ktor")
     implementation("io.ktor:ktor-server-cio:$ktor")
     implementation("io.ktor:ktor-server-content-negotiation:$ktor")
+
+    // QR matrix producer for the "Telefonla Yönet" screen (pure Java, no Android deps).
+    // The matrix is drawn by Compose Canvas; no image library is used.
+    implementation("com.google.zxing:core:3.5.3")
 }

@@ -52,6 +52,7 @@ fun ChannelDrawer(
     currentNumber: Int,
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
+    onManage: (() -> Unit)? = null,
 ) {
     val currentIndex = channels.indexOfFirst { it.number == currentNumber }
     val listState = rememberLazyListState(
@@ -108,6 +109,8 @@ fun ChannelDrawer(
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(vertical = 8.dp),
+                // Alt bilgi satırı ("Telefonla Yönet") her zaman görünür kalsın.
+                modifier = Modifier.weight(1f),
             ) {
                 itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel ->
                     ChannelRow(
@@ -123,6 +126,17 @@ fun ChannelDrawer(
                     }
                 }
             }
+
+            // Alt giriş: telefon paneli (kilit modunda hiç gösterilmez)
+            if (onManage != null) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(AntenaColors.Border),
+                )
+                ManageEntryRow(onClick = onManage)
+            }
         }
         // Kenarlık şeridi
         Box(
@@ -130,6 +144,35 @@ fun ChannelDrawer(
                 .fillMaxHeight()
                 .width(1.dp)
                 .background(AntenaColors.Border),
+        )
+    }
+}
+
+/** Çekmecenin altındaki "Telefonla Yönet" satırı. */
+@Composable
+private fun ManageEntryRow(onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(onClick = onClick)
+            .background(if (focused) AntenaColors.OverlayScrim else Color.Transparent)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(if (focused) AntenaColors.Accent else Color.Transparent),
+        )
+        Text(
+            "TELEFONLA YÖNET",
+            style = AntenaType.DrawerNumber,
+            color = if (focused) AntenaColors.Accent else AntenaColors.TextSecondary,
         )
     }
 }

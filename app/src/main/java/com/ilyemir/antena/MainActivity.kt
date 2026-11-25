@@ -48,9 +48,9 @@ fun AntenaApp(viewModel: AntenaViewModel = viewModel()) {
 
         // Doğrudan yayın: menü göstermeden son izlenen kanalı tam ekran aç
         else -> PlayerScreen(
+            viewModel = viewModel,
             channels = channels!!,
             initialChannelNumber = viewModel.lastChannelNumber.value,
-            onChannelChanged = viewModel::setLastChannelNumber,
         )
     }
 }
