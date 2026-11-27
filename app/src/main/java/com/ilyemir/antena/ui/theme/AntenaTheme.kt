@@ -67,6 +67,8 @@ object AntenaType {
     val BodyMedium = TextStyle(fontFamily = PlexSans, fontWeight = FontWeight.Medium, fontSize = 14.sp)
     val Label = TextStyle(fontFamily = PlexSans, fontWeight = FontWeight.Normal, fontSize = 12.sp)
     val LabelMono = TextStyle(fontFamily = PlexMono, fontWeight = FontWeight.Normal, fontSize = 12.sp)
+    /** OSD'de kanal adının yanındaki çözünürlük rozeti (1080p / 720p / 576p). */
+    val QualityBadge = TextStyle(fontFamily = PlexMono, fontWeight = FontWeight.Normal, fontSize = 11.sp)
     val Field = TextStyle(fontFamily = PlexSans, fontWeight = FontWeight.Normal, fontSize = 16.sp)
 }
 

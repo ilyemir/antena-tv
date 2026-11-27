@@ -94,6 +94,7 @@ fun PlayerScreen(
         onDispose { controller.release() }
     }
     val playbackState by controller.state.collectAsState()
+    val videoQuality by controller.videoQuality.collectAsState()
 
     var showDrawer by remember { mutableStateOf(false) }
     var showNumPad by remember { mutableStateOf(false) }
@@ -107,6 +108,7 @@ fun PlayerScreen(
     val guestMode by viewModel.guestMode.collectAsState()
     val aspectMode by viewModel.aspectMode.collectAsState()
     val sleepMinutes by viewModel.sleepMinutes.collectAsState()
+    val showClock by viewModel.showClock.collectAsState()
 
     // Web paneli komutları LaunchedEffect(Unit) içinde toplanır; eski kompozisyonun
     // kanal listesini/konumunu (stale closure) yakalamamak için tüm yardımcı fonksiyonlar
@@ -387,13 +389,31 @@ fun PlayerScreen(
                     color = AntenaColors.Accent,
                 )
                 Column {
-                    Text(
-                        channel.name,
-                        style = AntenaType.ChannelName,
-                        color = AntenaColors.TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // Kanal adı + kalite rozeti aynı satırda (bilgi şeridi tek satır kalır).
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            channel.name,
+                            style = AntenaType.ChannelName,
+                            color = AntenaColors.TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        val quality = videoQuality
+                        if (quality != null && playbackState == PlaybackController.State.Playing) {
+                            Text(
+                                quality,
+                                style = AntenaType.QualityBadge,
+                                color = AntenaColors.TextSecondary,
+                                modifier = Modifier
+                                    .background(AntenaColors.Surface)
+                                    .border(1.dp, AntenaColors.Border)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
                     Text(
                         when (playbackState) {
                             PlaybackController.State.Connecting -> "Bağlanıyor"
@@ -438,8 +458,6 @@ fun PlayerScreen(
                     style = AntenaType.NumberEntry,
                     color = AntenaColors.Accent,
                 )
-            } else {
-                Clock()
             }
             AnimatedVisibility(
                 visible = exitHintVisible,
@@ -451,6 +469,18 @@ fun PlayerScreen(
                     style = AntenaType.ExitHint,
                     color = AntenaColors.Accent,
                 )
+            }
+        }
+
+        // Ekran saati: panel'den kapatılana kadar sağ üst köşede durur.
+        if (showClock && numBuffer.isEmpty()) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
+                contentAlignment = Alignment.TopEnd,
+            ) {
+                Clock()
             }
         }
 
@@ -520,10 +550,15 @@ private fun Clock() {
         }
     }
     val format = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    // Yarı saydam konsol kutusu: okunabilirlik için ince kenarlıklı sade saat.
     Text(
         format.format(Date(now)),
         style = AntenaType.Clock,
-        color = AntenaColors.TextSecondary,
+        color = AntenaColors.TextPrimary,
+        modifier = Modifier
+            .background(AntenaColors.Surface.copy(alpha = 0.72f))
+            .border(1.dp, AntenaColors.Border)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
     )
 }
 

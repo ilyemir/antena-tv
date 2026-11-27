@@ -225,6 +225,10 @@ select{appearance:none;-webkit-appearance:none;background-image:none}
         <div class="t"><b>Açılışta Başlatma</b><small>Mi Box açılınca doğrudan yayın</small></div>
         <label class="switch"><input type="checkbox" id="swBoot"><i></i></label>
       </div>
+      <div class="setrow">
+        <div class="t"><b>Ekran Saati</b><small>TV'de sağ üstte dijital saat</small></div>
+        <label class="switch"><input type="checkbox" id="swClock"><i></i></label>
+      </div>
       <div class="setrow" style="display:block">
         <div class="t"><b>Uyku Zamanlayıcısı</b><small>Süre dolunca yayın kapanır</small></div>
         <select id="selSleep" style="margin-top:10px">
@@ -286,6 +290,7 @@ async function pollState(){
     $('#nowNo').textContent = st.currentNumber ? String(st.currentNumber).padStart(3,'0') : '—';
     $('#swGuest').checked = !!st.guestMode;
     $('#swBoot').checked = !!st.bootStart;
+    $('#swClock').checked = st.showClock !== false;
     $('#selSleep').value = String(st.sleepMinutes || 0);
     $('#selAspect').value = st.aspect || 'fit';
     if (plUrl.value === '') plUrl.value = st.source || '';
@@ -480,6 +485,10 @@ $('#swGuest').addEventListener('change', async e => {
 $('#swBoot').addEventListener('change', async e => {
   const r = await api('/api/settings', {bootStart: e.target.checked});
   say($('#syStatus'), r.ok ? 'açılışta başlatma ' + (e.target.checked ? 'açık' : 'kapalı') : 'hata', !r.ok);
+});
+$('#swClock').addEventListener('change', async e => {
+  const r = await api('/api/settings', {showClock: e.target.checked});
+  say($('#syStatus'), r.ok ? 'ekran saati ' + (e.target.checked ? 'açık' : 'kapalı') : 'hata', !r.ok);
 });
 $('#selSleep').addEventListener('change', async e => {
   const r = await api('/api/settings', {sleepMinutes: Number(e.target.value)});

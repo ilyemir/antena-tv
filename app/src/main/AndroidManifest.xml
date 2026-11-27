@@ -4,8 +4,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- antena.local mDNS cevaplayıcısı multicast paketlerini almak için -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- BootReceiver'ın Android 10+ arka plan Activity kısıtını aşıp kutu açılışında
+         kendiliğinden öne çıkabilmesi için ("Diğer uygulamaların üzerinde göster"). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Açılışta Activity başlatma yedeği: ön plan servisi Android 10+ arka plan
+         kısıtının ROM'ların kabul ettiği istisnasıdır. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <!-- Android TV device; remote-only, no touchscreen required -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -34,6 +45,15 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Overlay izni yokken açılışta Activity başlatmayı deneyen kısa ömürlü ön plan servisi -->
+        <service
+            android:name=".server.BootLaunchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Açılışta TV uygulamasını öne getirmek için tek seferlik başlatma köprüsü" />
+        </service>
         <!-- Mi Box yeniden başladığında doğrudan yayını aç (web panelinden kapatılabilir) -->
         <receiver
             android:name=".server.BootReceiver"

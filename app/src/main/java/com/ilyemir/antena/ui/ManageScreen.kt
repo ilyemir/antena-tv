@@ -89,6 +89,11 @@ fun ManageScreen(port: Int, onDismiss: () -> Unit) {
                     style = AntenaType.Label,
                     color = AntenaColors.TextSecondary,
                 )
+                Text(
+                    "mDNS destekli ağlarda: http://antena.local:$port",
+                    style = AntenaType.LabelMono,
+                    color = AntenaColors.TextSecondary,
+                )
                 Text("Geri tuşu: kapat", style = AntenaType.LabelMono, color = AntenaColors.TextSecondary)
             }
 

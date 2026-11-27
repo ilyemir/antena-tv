@@ -15,3 +15,7 @@ NTV
 Habertürk
 CNN Türk
 TRT Spor
+DMAX
+TLC
+Teve2
+TV8.5

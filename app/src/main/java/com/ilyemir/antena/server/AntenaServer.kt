@@ -106,6 +106,7 @@ class AntenaServer(
                     .put("sleepMinutes", AntenaRuntime.sleepMinutes.value)
                     .put("bootStart", AntenaRuntime.bootStart.value)
                     .put("aspect", AntenaRuntime.aspectMode.value)
+                    .put("showClock", AntenaRuntime.showClock.value)
                     .put("source", AntenaRuntime.m3uUrl.value)
                     .toString(),
                 ContentType.Application.Json,
@@ -232,6 +233,11 @@ class AntenaServer(
                     val value = body.optString("aspect").ifEmpty { "fit" }
                     container.settings.setAspectMode(value)
                     AntenaRuntime.aspectMode.value = value
+                }
+                if (body.has("showClock")) {
+                    val value = body.getBoolean("showClock")
+                    container.settings.setShowClock(value)
+                    AntenaRuntime.showClock.value = value
                 }
             }
             call.respondText(ok().toString(), ContentType.Application.Json)

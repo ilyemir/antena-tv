@@ -6,6 +6,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -45,15 +47,23 @@ class PlaybackController(context: Context) : Player.Listener {
     private val _state = MutableStateFlow(State.Idle)
     val state: StateFlow<State> = _state
 
+    /** Aktif yayının çözünürlük etiketi ("1080p", "720p"...); yayın yokken null. */
+    private val _videoQuality = MutableStateFlow<String?>(null)
+    val videoQuality: StateFlow<String?> = _videoQuality
+
     val player: ExoPlayer
 
     private var channel: ChannelEntity? = null
     private var usingBackup = false
     private var triedHls = false
     private var reconnectAttempts = 0
+    /** web:// ve yt:// kanalları için oynatma anında çözülen gerçek akış adresi. */
+    private var resolvedUrl: String? = null
+    private var resolvedUserAgent: String? = null
 
     private var fallbackJob: Job? = null
     private var reconnectJob: Job? = null
+    private var resolveJob: Job? = null
 
     init {
         val renderersFactory = DefaultRenderersFactory(context)
@@ -62,13 +72,14 @@ class PlaybackController(context: Context) : Player.Listener {
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
 
-        // Canlı TV için küçük arabellek: hızlı zap, düşük gecikme.
+        // Canlı TV arabelleği: hızlı zap için küçük ama CDN parça gecikmelerinde
+        // (özellikle ATV/ercdn dalgalanmalarında) donmayı önleyecek kadar geniş.
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs= */ 10_000,
-                /* maxBufferMs= */ 20_000,
-                /* bufferForPlaybackMs= */ 1_000,
-                /* bufferForPlaybackAfterRebufferMs= */ 2_000,
+                /* minBufferMs= */ 15_000,
+                /* maxBufferMs= */ 30_000,
+                /* bufferForPlaybackMs= */ 2_500,
+                /* bufferForPlaybackAfterRebufferMs= */ 5_000,
             )
             .build()
 
@@ -81,16 +92,37 @@ class PlaybackController(context: Context) : Player.Listener {
             .apply { addListener(this@PlaybackController) }
     }
 
-    /** Kanalı çalmaya başlar; önceki kare yeni yayın gelene kadar ekranda kalır. */
+    /**
+     * Kanalı çalmaya başlar; önceki kare yeni yayın gelene kadar ekranda kalır.
+     * web:// ve yt:// önekli kanallar önce [StreamResolver] ile gerçek .m3u8
+     * adresine çevrilir; düz http(s) adreslerde gecizmesiz doğrudan başlar.
+     */
     fun play(channel: ChannelEntity) {
         fallbackJob?.cancel()
         reconnectJob?.cancel()
+        resolveJob?.cancel()
         this.channel = channel
         usingBackup = false
         triedHls = false
         reconnectAttempts = 0
-        startSource(channel.url)
-        scheduleBackupFallback(channel)
+        resolvedUrl = null
+        resolvedUserAgent = null
+        _videoQuality.value = null
+        if (StreamResolver.needsResolution(channel.url)) {
+            _state.value = State.Connecting
+            resolveJob = scope.launch {
+                val resolved = StreamResolver.resolve(channel)
+                // Kanal bu sırada değiştiyse eski çözümün sonucunu uygulamaya.
+                if (this@PlaybackController.channel === channel) {
+                    resolvedUserAgent = resolved.userAgent
+                    startSource(resolved.url)
+                }
+                scheduleBackupFallback(channel)
+            }
+        } else {
+            startSource(channel.url)
+            scheduleBackupFallback(channel)
+        }
     }
 
     private fun startSource(url: String, forceHls: Boolean = false) {
@@ -117,11 +149,52 @@ class PlaybackController(context: Context) : Player.Listener {
             reconnectJob?.cancel()
             reconnectAttempts = 0
             _state.value = State.Playing
+        } else {
+            _videoQuality.value = null
         }
+    }
+
+    /** OSD kalite rozeti: video boyutu geldikçe "1080p" gibi etiket üret. */
+    override fun onVideoSizeChanged(videoSize: VideoSize) = publishQuality(videoSize)
+
+    override fun onTracksChanged(tracks: Tracks) {
+        // HLS seviye değişimlerinde (720p→1080p) rozeti tazele: Media3 seçili
+        // track'in gerçek boyutunu player.videoSize üzerinden bildirir.
+        val size = player.videoSize
+        if (size.height > 0 && tracks.groups.any { it.isSelected && it.type == C.TRACK_TYPE_VIDEO }) {
+            _videoQuality.value = qualityLabel(size)
+        }
+    }
+
+    private fun publishQuality(size: VideoSize) {
+        if (size.height > 0) _videoQuality.value = qualityLabel(size)
+    }
+
+    /** Yükseklik en yakın standart TV çizgisine yuvarlanır (1088→1080p, 728→720p). */
+    private fun qualityLabel(size: VideoSize): String {
+        val ladder = intArrayOf(2160, 1440, 1080, 720, 576, 480, 360, 240)
+        val line = ladder.minByOrNull { kotlin.math.abs(it - size.height) } ?: return "${size.height}p"
+        return "$line${if (size.height * 16 > size.width * 9) "i" else "p"}"
     }
 
     override fun onPlayerError(error: PlaybackException) {
         val channel = this.channel ?: return
+
+        // Çözülmüş dinamik akış (web://, yt://) öldüyse token süresi dolmuş olabilir:
+        // sayfayı yeniden çözerek taze adresle dene.
+        if (StreamResolver.needsResolution(channel.url)) {
+            _state.value = State.Reconnecting
+            reconnectJob?.cancel()
+            reconnectJob = scope.launch {
+                delay(if (reconnectAttempts < FAST_RECONNECT_TRIES) FAST_RECONNECT_MS else SLOW_RECONNECT_MS)
+                reconnectAttempts++
+                val resolved = StreamResolver.resolve(channel)
+                resolvedUserAgent = resolved.userAgent
+                resolvedUrl = resolved.url
+                if (this@PlaybackController.channel === channel) startSource(resolved.url)
+            }
+            return
+        }
 
         // Uzantısız adres bazı sunucularda düz TS/HLS olarak yayınlanır; bir kez HLS zorla.
         if (!triedHls && !isHlsUrl(channel.url)) {
@@ -165,7 +238,8 @@ class PlaybackController(context: Context) : Player.Listener {
             channel.referrer?.let { put("Referer", it) }
         }
         val dataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent(channel.userAgent ?: DEFAULT_USER_AGENT)
+            // Dinamik çözücü (yt://) adresi hangi UA ile aldıysa parçalar da onunla istenir.
+            .setUserAgent(channel.userAgent ?: resolvedUserAgent ?: DEFAULT_USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
             // 3 sn bağlantı zaman aşımı: yedek adrese geçiş gecikmesine hizalı.
             .setConnectTimeoutMs(BACKUP_FALLBACK_MS.toInt())

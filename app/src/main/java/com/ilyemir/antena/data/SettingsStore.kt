@@ -24,6 +24,7 @@ class SettingsStore(private val context: Context) {
         val SLEEP_MINUTES = intPreferencesKey("sleep_minutes")
         val BOOT_START = booleanPreferencesKey("boot_start")
         val ASPECT_MODE = stringPreferencesKey("aspect_mode")
+        val SHOW_CLOCK = booleanPreferencesKey("show_clock")
     }
 
     val m3uUrl: Flow<String> = context.dataStore.data.map { it[Keys.M3U_URL] ?: "" }
@@ -40,6 +41,9 @@ class SettingsStore(private val context: Context) {
 
     /** fit | fill | original */
     val aspectMode: Flow<String> = context.dataStore.data.map { it[Keys.ASPECT_MODE] ?: "fit" }
+
+    /** Sağ üstteki dijital ekran saati görünsün mü? Varsayılan açık. */
+    val showClock: Flow<Boolean> = context.dataStore.data.map { it[Keys.SHOW_CLOCK] ?: true }
 
     suspend fun setM3uUrl(url: String) {
         context.dataStore.edit { it[Keys.M3U_URL] = url }
@@ -63,5 +67,9 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setAspectMode(mode: String) {
         context.dataStore.edit { it[Keys.ASPECT_MODE] = mode }
+    }
+
+    suspend fun setShowClock(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_CLOCK] = enabled }
     }
 }

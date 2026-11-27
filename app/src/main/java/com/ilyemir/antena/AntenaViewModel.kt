@@ -44,6 +44,10 @@ class AntenaViewModel(application: Application) : AndroidViewModel(application) 
     val sleepMinutes: StateFlow<Int> = settings.sleepMinutes
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
+    /** Ekran saati (sağ üst); web panelinden kapatılabilir. */
+    val showClock: StateFlow<Boolean> = settings.showClock
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
     val serverPort: Int
         get() = container.serverPort
 
